@@ -71,6 +71,7 @@ justq translate --to french --no-copy "hello world"
 ```
 
 By default, `justq` pretty-prints the response in an interactive terminal and
+shows a small waiting spinner on stderr while the local model is thinking. It
 prints plain Markdown when stdout is piped. Force plain Markdown with:
 
 ```bash

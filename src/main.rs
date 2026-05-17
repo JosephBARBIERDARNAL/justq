@@ -1,6 +1,12 @@
 use std::{
     env,
-    io::{self, IsTerminal, Read},
+    io::{self, IsTerminal, Read, Write},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -16,6 +22,17 @@ const MARKDOWN_SYSTEM_PROMPT: &str = "\
 You are a precise bilingual writing assistant for French and English. \
 Return valid Markdown. Return only the requested text, with no introduction, \
 explanation, quotation marks, or surrounding code block.";
+const SPINNER_FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
+const SPINNER_MESSAGES: [&str; 8] = [
+    "Polishing the sentence",
+    "Looking for the mot juste",
+    "Negotiating with accents",
+    "Untangling grammar",
+    "Sharpening the wording",
+    "Keeping the tone intact",
+    "Checking both languages",
+    "Warming up the local model",
+];
 
 #[derive(Debug, Parser)]
 #[command(
@@ -141,10 +158,12 @@ async fn main() -> Result<()> {
         ],
     );
 
-    let response = ollama
-        .send_chat_messages(request)
-        .await
-        .with_context(|| format!("failed to query Ollama model {}", cli.model))?;
+    let spinner = Spinner::start();
+    let response = ollama.send_chat_messages(request).await;
+    drop(spinner);
+
+    let response =
+        response.with_context(|| format!("failed to query Ollama model {}", cli.model))?;
     let output = response.message.content.trim();
 
     print_output(output, &title, cli.raw);
@@ -254,6 +273,65 @@ fn copy_to_clipboard(output: &str) -> Result<()> {
     clipboard
         .set_text(output.to_string())
         .context("failed to copy output to the system clipboard")
+}
+
+struct Spinner {
+    running: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Spinner {
+    fn start() -> Self {
+        if !io::stderr().is_terminal() {
+            return Self {
+                running: Arc::new(AtomicBool::new(false)),
+                handle: None,
+            };
+        }
+
+        let running = Arc::new(AtomicBool::new(true));
+        let thread_running = Arc::clone(&running);
+        let message = random_spinner_message();
+        let handle = thread::spawn(move || {
+            let mut stderr = io::stderr();
+            let mut frame_index = 0;
+
+            while thread_running.load(Ordering::Relaxed) {
+                let frame = SPINNER_FRAMES[frame_index % SPINNER_FRAMES.len()];
+                let _ = write!(stderr, "\r\x1b[2m{frame} {message}...\x1b[0m");
+                let _ = stderr.flush();
+                frame_index += 1;
+                thread::sleep(Duration::from_millis(120));
+            }
+
+            let _ = write!(stderr, "\r\x1b[2K");
+            let _ = stderr.flush();
+        });
+
+        Self {
+            running,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for Spinner {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn random_spinner_message() -> &'static str {
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let index = seed as usize % SPINNER_MESSAGES.len();
+
+    SPINNER_MESSAGES[index]
 }
 
 fn print_output(output: &str, title: &str, raw: bool) {
