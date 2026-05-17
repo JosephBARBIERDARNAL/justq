@@ -1,4 +1,7 @@
-use std::io::{self, IsTerminal, Read};
+use std::{
+    env,
+    io::{self, IsTerminal, Read},
+};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -7,14 +10,20 @@ use ollama_rs::{
     generation::chat::{ChatMessage, request::ChatMessageRequest},
 };
 
+const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
 const MARKDOWN_SYSTEM_PROMPT: &str = "\
 You are a concise assistant. Answer in Markdown. Do not wrap the entire answer \
 in a code block unless the user explicitly asks for raw code.";
 
 #[derive(Debug, Parser)]
 #[command(
+    name = "justq",
     version,
-    about = "Ask a local Ollama model one question and print the Markdown answer."
+    about = "Ask a local Ollama model one question and print the Markdown answer.",
+    after_help = "Examples:
+  justq \"correct English errors: bla bla bla\"
+  echo \"explain this error\" | justq
+  justq --model llama3:latest \"summarize Rust ownership\""
 )]
 struct Cli {
     #[arg(
@@ -29,10 +38,10 @@ struct Cli {
     #[arg(
         long,
         env = "OLLAMA_URL",
-        default_value = "http://127.0.0.1:11434",
-        help = "Base URL for the Ollama server"
+        value_name = "URL",
+        help = "Base URL for the Ollama server; also falls back to OLLAMA_HOST"
     )]
-    ollama_url: String,
+    ollama_url: Option<String>,
 
     #[arg(
         value_name = "QUESTION",
@@ -46,9 +55,10 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let question = read_question(&cli.question)?;
+    let ollama_url = configured_ollama_url(cli.ollama_url.as_deref());
 
-    let ollama = Ollama::try_new(cli.ollama_url.as_str())
-        .with_context(|| format!("invalid Ollama URL: {}", cli.ollama_url))?;
+    let ollama = Ollama::try_new(ollama_url.as_str())
+        .with_context(|| format!("invalid Ollama URL: {ollama_url}"))?;
     let request = ChatMessageRequest::new(
         cli.model.clone(),
         vec![
@@ -88,4 +98,45 @@ fn read_question(args: &[String]) -> Result<String> {
     }
 
     Ok(question)
+}
+
+fn configured_ollama_url(arg_value: Option<&str>) -> String {
+    let value = arg_value
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| env::var("OLLAMA_HOST").ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string());
+
+    normalize_ollama_url(&value)
+}
+
+fn normalize_ollama_url(value: &str) -> String {
+    let value = value.trim().trim_end_matches('/');
+    if value.contains("://") {
+        value.to_string()
+    } else {
+        format!("http://{value}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_ollama_url;
+
+    #[test]
+    fn preserves_full_urls() {
+        assert_eq!(
+            normalize_ollama_url("http://127.0.0.1:11434/"),
+            "http://127.0.0.1:11434"
+        );
+    }
+
+    #[test]
+    fn adds_http_scheme_when_missing() {
+        assert_eq!(
+            normalize_ollama_url("localhost:11434"),
+            "http://localhost:11434"
+        );
+    }
 }

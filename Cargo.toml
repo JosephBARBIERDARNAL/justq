@@ -2,6 +2,17 @@
 name = "justa-question"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "A tiny Markdown-answer CLI for asking local Ollama models one question."
+repository = "https://github.com/y-sunflower/justa-question"
+readme = "README.md"
+keywords = ["ollama", "llm", "cli", "markdown"]
+categories = ["command-line-utilities"]
+autobins = false
+
+[[bin]]
+name = "justq"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
