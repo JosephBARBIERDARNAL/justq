@@ -1,0 +1,10 @@
+[package]
+name = "justa-question"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive", "env"] }
+ollama-rs = "0.3.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
