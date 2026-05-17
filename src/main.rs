@@ -145,7 +145,6 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let input = read_text(cli.command.text_args())?;
     let user_prompt = cli.command.prompt(&input);
-    let title = cli.command.title();
     let ollama_url = configured_ollama_url(cli.ollama_url.as_deref());
 
     let ollama = Ollama::try_new(ollama_url.as_str())
@@ -166,7 +165,7 @@ async fn main() -> Result<()> {
         response.with_context(|| format!("failed to query Ollama model {}", cli.model))?;
     let output = response.message.content.trim();
 
-    print_output(output, &title, cli.raw);
+    print_output(output, cli.raw);
 
     if !cli.no_copy {
         match copy_to_clipboard(output) {
@@ -190,19 +189,6 @@ impl Command {
         match self {
             Self::Translate(command) => translate_prompt(command.to, input),
             Self::Correct(command) => correct_prompt(command.language, input),
-        }
-    }
-
-    fn title(&self) -> String {
-        match self {
-            Self::Translate(command) => match command.to {
-                Some(language) => format!("Translation to {}", language.label()),
-                None => "Translation".to_string(),
-            },
-            Self::Correct(command) => match command.language {
-                Some(language) => format!("Correction in {}", language.label()),
-                None => "Correction".to_string(),
-            },
         }
     }
 }
@@ -334,13 +320,12 @@ fn random_spinner_message() -> &'static str {
     SPINNER_MESSAGES[index]
 }
 
-fn print_output(output: &str, title: &str, raw: bool) {
+fn print_output(output: &str, raw: bool) {
     if raw || !io::stdout().is_terminal() {
         println!("{output}");
         return;
     }
 
-    println!("\x1b[1;36m## {title}\x1b[0m\n");
     println!("{output}");
 }
 
