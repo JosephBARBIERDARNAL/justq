@@ -16,13 +16,20 @@ use ollama_rs::{
     Ollama,
     generation::chat::{ChatMessage, request::ChatMessageRequest},
 };
+use termimad::MadSkin;
 
 const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
 const DEFAULT_MODEL: &str = "qwen2.5-coder:14b";
-const MARKDOWN_SYSTEM_PROMPT: &str = "\
+const WRITING_SYSTEM_PROMPT: &str = "\
 You are a precise bilingual writing assistant for French and English. \
 Return only the requested text, with no introduction, \
 explanation, quotation marks, or surrounding code block.";
+const ASK_SYSTEM_PROMPT: &str = "\
+You are a senior software development assistant. \
+Answer the user's question directly with practical software engineering guidance. \
+Use concise Markdown with short sections, bullets when useful, and fenced code blocks for code. \
+Do not translate or correct the question unless explicitly asked.\
+The question might not be about software development, in this case adapt to it.";
 const SPINNER_FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
 const SPINNER_MESSAGES: [&str; 8] = [
     "Polishing the sentence",
@@ -39,10 +46,11 @@ const SPINNER_MESSAGES: [&str; 8] = [
 #[command(
     name = "justq",
     version,
-    about = "Translate or correct French/English text with a local Ollama model.",
+    about = "Ask software development questions, translate, or correct French/English text with a local Ollama model.",
     after_help = "Examples:
   justq correct \"i has a apple\"
   justq translate \"bonjour tout le monde\"
+  justq ask \"how do I handle errors in Rust?\"
   justq translate --to french \"hello world\"
   justq --no-copy correct \"je suis aller au bureau\""
 )]
@@ -102,6 +110,16 @@ enum Command {
   echo \"i has a apple\" | justq correct --no-copy"
     )]
     Correct(CorrectCommand),
+
+    #[command(
+        alias = "a",
+        about = "Ask a concise software development question",
+        after_help = "Examples:
+  justq ask \"how do I handle errors in Rust?\"
+  justq ask \"explain when to use Arc<Mutex<T>>\"
+  echo \"why is this borrow checker error happening?\" | justq ask --no-copy"
+    )]
+    Ask(AskCommand),
 }
 
 #[derive(Debug, Args)]
@@ -132,6 +150,12 @@ struct CorrectCommand {
     text: Vec<String>,
 }
 
+#[derive(Debug, Args)]
+struct AskCommand {
+    #[arg(value_name = "QUESTION")]
+    question: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum Language {
     #[value(alias = "en")]
@@ -144,6 +168,7 @@ enum Language {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let input = read_text(cli.command.text_args())?;
+    let system_prompt = cli.command.system_prompt();
     let user_prompt = cli.command.prompt(&input);
     let model = configured_model(cli.model.as_deref());
     let ollama_url = configured_ollama_url(cli.ollama_url.as_deref());
@@ -153,7 +178,7 @@ async fn main() -> Result<()> {
     let request = ChatMessageRequest::new(
         model.clone(),
         vec![
-            ChatMessage::system(MARKDOWN_SYSTEM_PROMPT.to_string()),
+            ChatMessage::system(system_prompt.to_string()),
             ChatMessage::user(user_prompt),
         ],
     );
@@ -182,6 +207,14 @@ impl Command {
         match self {
             Self::Translate(command) => &command.text,
             Self::Correct(command) => &command.text,
+            Self::Ask(command) => &command.question,
+        }
+    }
+
+    fn system_prompt(&self) -> &'static str {
+        match self {
+            Self::Translate(_) | Self::Correct(_) => WRITING_SYSTEM_PROMPT,
+            Self::Ask(_) => ASK_SYSTEM_PROMPT,
         }
     }
 
@@ -189,6 +222,7 @@ impl Command {
         match self {
             Self::Translate(command) => translate_prompt(command.to, input),
             Self::Correct(command) => correct_prompt(command.language, input),
+            Self::Ask(_) => ask_prompt(input),
         }
     }
 }
@@ -227,6 +261,13 @@ fn correct_prompt(language: Option<Language>, input: &str) -> String {
         "{language_instruction} Correct grammar, spelling, punctuation, and wording errors. \
 Preserve the original language, meaning, tone, line breaks, and keep as much as possible original style. \
 Return only the corrected text.\n\nText:\n{input}"
+    )
+}
+
+fn ask_prompt(input: &str) -> String {
+    format!(
+        "Answer this software development question. \
+Be concise, practical, and write valid Markdown.\n\nQuestion:\n{input}"
     )
 }
 
@@ -326,7 +367,8 @@ fn print_output(output: &str, raw: bool) {
         return;
     }
 
-    println!("{output}");
+    let skin = MadSkin::default();
+    skin.print_text(output);
 }
 
 fn print_status(message: &str) {
@@ -379,7 +421,10 @@ fn normalize_ollama_url(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Language, correct_prompt, normalize_ollama_url, select_model, translate_prompt};
+    use super::{
+        ASK_SYSTEM_PROMPT, Language, ask_prompt, correct_prompt, normalize_ollama_url,
+        select_model, translate_prompt,
+    };
 
     #[test]
     fn preserves_full_urls() {
@@ -411,6 +456,16 @@ mod tests {
 
         assert!(prompt.contains("The text is in English."));
         assert!(prompt.contains("Return only the corrected text."));
+    }
+
+    #[test]
+    fn ask_prompt_targets_software_development_markdown() {
+        let prompt = ask_prompt("when should I use Result?");
+
+        assert!(prompt.contains("software development question"));
+        assert!(prompt.contains("write valid Markdown"));
+        assert!(prompt.contains("Question:\nwhen should I use Result?"));
+        assert!(ASK_SYSTEM_PROMPT.contains("software development assistant"));
     }
 
     #[test]
