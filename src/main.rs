@@ -212,7 +212,7 @@ fn translate_prompt(target_language: Option<Language>, input: &str) -> String {
     };
 
     format!(
-        "{target_instruction} Preserve meaning, tone, line breaks, and Markdown formatting. \
+        "{target_instruction} Preserve meaning, tone and line breaks. \
 Return only the translated text.\n\nText:\n{input}"
     )
 }
@@ -225,7 +225,7 @@ fn correct_prompt(language: Option<Language>, input: &str) -> String {
 
     format!(
         "{language_instruction} Correct grammar, spelling, punctuation, and wording errors. \
-Preserve the original language, meaning, tone, line breaks, and Markdown formatting. \
+Preserve the original language, meaning, tone, line breaks, and keep as much as possible original style. \
 Return only the corrected text.\n\nText:\n{input}"
     )
 }
