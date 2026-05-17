@@ -1,12 +1,12 @@
 [package]
-name = "justa-question"
+name = "justq"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A tiny French/English translation and correction CLI powered by local Ollama models."
-repository = "https://github.com/y-sunflower/justa-question"
 readme = "README.md"
-keywords = ["ollama", "llm", "cli", "markdown"]
+repository = "https://github.com/y-sunflower/justq"
+keywords = ["cli", "llm", "markdown", "ollama"]
 categories = ["command-line-utilities"]
 autobins = false
 

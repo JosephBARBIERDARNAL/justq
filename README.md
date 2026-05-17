@@ -1,4 +1,4 @@
-# justa-question
+# justq
 
 A tiny Rust CLI that translates or corrects French/English text with a local
 Ollama model.
@@ -18,7 +18,7 @@ ollama pull qwen2.5-coder:14b
 ## Install
 
 ```bash
-cargo install --git https://github.com/y-sunflower/justa-question
+cargo install --git https://github.com/y-sunflower/justq
 ```
 
 ## Usage
@@ -113,7 +113,7 @@ jq correct "i has a apple"
 ## Build From Source
 
 ```bash
-git clone https://github.com/y-sunflower/justa-question.git
-cd justa-question
+git clone https://github.com/y-sunflower/justq.git
+cd justq
 cargo build --release
 ```
