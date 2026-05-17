@@ -60,11 +60,14 @@ echo "i has a apple" | justq correct
 echo "bonjour tout le monde" | justq translate --to en
 ```
 
-Copy the model output to your clipboard:
+The model output is copied to your clipboard automatically. The clipboard only
+receives the raw corrected or translated text, not the pretty terminal title.
+
+Disable clipboard copy with:
 
 ```bash
-justq --copy correct "i has a apple"
-justq translate --to french --copy "hello world"
+justq --no-copy correct "i has a apple"
+justq translate --to french --no-copy "hello world"
 ```
 
 By default, `justq` pretty-prints the response in an interactive terminal and

@@ -26,7 +26,7 @@ explanation, quotation marks, or surrounding code block.";
   justq correct \"i has a apple\"
   justq translate \"bonjour tout le monde\"
   justq translate --to french \"hello world\"
-  justq --copy correct \"je suis aller au bureau\""
+  justq --no-copy correct \"je suis aller au bureau\""
 )]
 struct Cli {
     #[arg(
@@ -47,12 +47,11 @@ struct Cli {
     ollama_url: Option<String>,
 
     #[arg(
-        short = 'c',
         long,
         global = true,
-        help = "Copy the raw model output to the system clipboard"
+        help = "Do not copy the raw model output to the system clipboard"
     )]
-    copy: bool,
+    no_copy: bool,
 
     #[arg(
         long,
@@ -83,7 +82,7 @@ enum Command {
         after_help = "Examples:
   justq correct \"i has a apple\"
   justq correct --language french \"je suis aller au bureau\"
-  echo \"i has a apple\" | justq correct --copy"
+  echo \"i has a apple\" | justq correct --no-copy"
     )]
     Correct(CorrectCommand),
 }
@@ -148,14 +147,13 @@ async fn main() -> Result<()> {
         .with_context(|| format!("failed to query Ollama model {}", cli.model))?;
     let output = response.message.content.trim();
 
-    if cli.copy {
-        copy_to_clipboard(output)?;
-    }
-
     print_output(output, &title, cli.raw);
 
-    if cli.copy {
-        print_status("Copied to clipboard.");
+    if !cli.no_copy {
+        match copy_to_clipboard(output) {
+            Ok(()) => print_status("Copied to clipboard."),
+            Err(error) => print_status(&format!("Could not copy to clipboard: {error:#}")),
+        }
     }
 
     Ok(())
