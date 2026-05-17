@@ -1,7 +1,7 @@
 # justa-question
 
-A tiny Rust CLI that asks a local Ollama model one question and prints the answer
-as Markdown.
+A tiny Rust CLI that translates or corrects French/English text with a local
+Ollama model.
 
 The installed command is `justq`.
 
@@ -23,36 +23,75 @@ cargo install --git https://github.com/y-sunflower/justa-question
 
 ## Usage
 
-Ask a question:
+Correct text:
 
 ```bash
-justq "correct English errors: bla bla bla"
+justq correct "i has a apple"
+justq correct "je suis aller au bureau"
 ```
 
-Pipe a question from stdin:
+Translate between French and English:
 
 ```bash
-echo "correct English errors: i has a apple" | justq
+justq translate "bonjour tout le monde"
+justq translate "hello world"
+```
+
+Force a language when the text is ambiguous:
+
+```bash
+justq correct --language english "i has a apple"
+justq correct --language french "je suis aller au bureau"
+justq translate --to english "bonjour tout le monde"
+justq translate --to french "hello world"
+```
+
+Short aliases:
+
+```bash
+justq fix "i has a apple"
+justq t --to fr "hello world"
+```
+
+Pipe text from stdin:
+
+```bash
+echo "i has a apple" | justq correct
+echo "bonjour tout le monde" | justq translate --to en
+```
+
+Copy the model output to your clipboard:
+
+```bash
+justq --copy correct "i has a apple"
+justq translate --to french --copy "hello world"
+```
+
+By default, `justq` pretty-prints the response in an interactive terminal and
+prints plain Markdown when stdout is piped. Force plain Markdown with:
+
+```bash
+justq --raw correct "i has a apple"
 ```
 
 Use another model:
 
 ```bash
-justq --model llama3:latest "explain Rust ownership in 5 bullets"
+justq --model llama3:latest correct "i has a apple"
 ```
 
 Use another Ollama server:
 
 ```bash
-justq --ollama-url http://localhost:11434 "summarize this"
+justq --ollama-url http://localhost:11434 translate "hello world"
 ```
 
 Configuration can also come from environment variables:
 
 ```bash
-OLLAMA_MODEL=llama3:latest justq "write a git commit message"
-OLLAMA_HOST=http://localhost:11434 justq "what is a borrow checker?"
-OLLAMA_URL=http://localhost:11434 justq "what is a borrow checker?"
+OLLAMA_MODEL=llama3:latest justq correct "i has a apple"
+OLLAMA_HOST=http://localhost:11434 justq translate "hello world"
+OLLAMA_URL=http://localhost:11434 justq translate "hello world"
 ```
 
 ## Short Alias
@@ -68,7 +107,7 @@ alias jq='justq'
 Then you can run:
 
 ```bash
-jq "correct English errors: bla bla bla"
+jq correct "i has a apple"
 ```
 
 ## Build From Source

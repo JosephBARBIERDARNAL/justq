@@ -4,7 +4,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use arboard::Clipboard;
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use ollama_rs::{
     Ollama,
     generation::chat::{ChatMessage, request::ChatMessageRequest},
@@ -12,18 +13,20 @@ use ollama_rs::{
 
 const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
 const MARKDOWN_SYSTEM_PROMPT: &str = "\
-You are a concise assistant. Answer in Markdown. Do not wrap the entire answer \
-in a code block unless the user explicitly asks for raw code.";
+You are a precise bilingual writing assistant for French and English. \
+Return valid Markdown. Return only the requested text, with no introduction, \
+explanation, quotation marks, or surrounding code block.";
 
 #[derive(Debug, Parser)]
 #[command(
     name = "justq",
     version,
-    about = "Ask a local Ollama model one question and print the Markdown answer.",
+    about = "Translate or correct French/English text with a local Ollama model.",
     after_help = "Examples:
-  justq \"correct English errors: bla bla bla\"
-  echo \"explain this error\" | justq
-  justq --model llama3:latest \"summarize Rust ownership\""
+  justq correct \"i has a apple\"
+  justq translate \"bonjour tout le monde\"
+  justq translate --to french \"hello world\"
+  justq --copy correct \"je suis aller au bureau\""
 )]
 struct Cli {
     #[arg(
@@ -44,17 +47,89 @@ struct Cli {
     ollama_url: Option<String>,
 
     #[arg(
-        value_name = "QUESTION",
-        allow_hyphen_values = true,
-        trailing_var_arg = true
+        short = 'c',
+        long,
+        global = true,
+        help = "Copy the raw model output to the system clipboard"
     )]
-    question: Vec<String>,
+    copy: bool,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Print only the raw Markdown output, without terminal formatting"
+    )]
+    raw: bool,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    #[command(
+        alias = "t",
+        about = "Translate between French and English",
+        after_help = "Examples:
+  justq translate \"bonjour tout le monde\"
+  justq translate --to english \"bonjour tout le monde\"
+  echo \"hello world\" | justq translate --to french"
+    )]
+    Translate(TranslateCommand),
+
+    #[command(
+        alias = "fix",
+        about = "Correct French or English text",
+        after_help = "Examples:
+  justq correct \"i has a apple\"
+  justq correct --language french \"je suis aller au bureau\"
+  echo \"i has a apple\" | justq correct --copy"
+    )]
+    Correct(CorrectCommand),
+}
+
+#[derive(Debug, Args)]
+struct TranslateCommand {
+    #[arg(
+        short,
+        long,
+        value_enum,
+        help = "Target language; if omitted, justq translates to the other language"
+    )]
+    to: Option<Language>,
+
+    #[arg(value_name = "TEXT")]
+    text: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct CorrectCommand {
+    #[arg(
+        short,
+        long,
+        value_enum,
+        help = "Text language; if omitted, the model detects French or English"
+    )]
+    language: Option<Language>,
+
+    #[arg(value_name = "TEXT")]
+    text: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum Language {
+    #[value(alias = "en")]
+    English,
+    #[value(alias = "fr")]
+    French,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let question = read_question(&cli.question)?;
+    let input = read_text(cli.command.text_args())?;
+    let user_prompt = cli.command.prompt(&input);
+    let title = cli.command.title();
     let ollama_url = configured_ollama_url(cli.ollama_url.as_deref());
 
     let ollama = Ollama::try_new(ollama_url.as_str())
@@ -63,7 +138,7 @@ async fn main() -> Result<()> {
         cli.model.clone(),
         vec![
             ChatMessage::system(MARKDOWN_SYSTEM_PROMPT.to_string()),
-            ChatMessage::user(question),
+            ChatMessage::user(user_prompt),
         ],
     );
 
@@ -71,33 +146,134 @@ async fn main() -> Result<()> {
         .send_chat_messages(request)
         .await
         .with_context(|| format!("failed to query Ollama model {}", cli.model))?;
+    let output = response.message.content.trim();
 
-    println!("{}", response.message.content.trim());
+    if cli.copy {
+        copy_to_clipboard(output)?;
+    }
+
+    print_output(output, &title, cli.raw);
+
+    if cli.copy {
+        print_status("Copied to clipboard.");
+    }
+
     Ok(())
 }
 
-fn read_question(args: &[String]) -> Result<String> {
-    let question = if args.is_empty() {
+impl Command {
+    fn text_args(&self) -> &[String] {
+        match self {
+            Self::Translate(command) => &command.text,
+            Self::Correct(command) => &command.text,
+        }
+    }
+
+    fn prompt(&self, input: &str) -> String {
+        match self {
+            Self::Translate(command) => translate_prompt(command.to, input),
+            Self::Correct(command) => correct_prompt(command.language, input),
+        }
+    }
+
+    fn title(&self) -> String {
+        match self {
+            Self::Translate(command) => match command.to {
+                Some(language) => format!("Translation to {}", language.label()),
+                None => "Translation".to_string(),
+            },
+            Self::Correct(command) => match command.language {
+                Some(language) => format!("Correction in {}", language.label()),
+                None => "Correction".to_string(),
+            },
+        }
+    }
+}
+
+impl Language {
+    fn label(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::French => "French",
+        }
+    }
+}
+
+fn translate_prompt(target_language: Option<Language>, input: &str) -> String {
+    let target_instruction = match target_language {
+        Some(language) => format!("Translate the text into {}.", language.label()),
+        None => {
+            "Detect whether the text is French or English, then translate it into the other language."
+                .to_string()
+        }
+    };
+
+    format!(
+        "{target_instruction} Preserve meaning, tone, line breaks, and Markdown formatting. \
+Return only the translated text.\n\nText:\n{input}"
+    )
+}
+
+fn correct_prompt(language: Option<Language>, input: &str) -> String {
+    let language_instruction = match language {
+        Some(language) => format!("The text is in {}.", language.label()),
+        None => "Detect whether the text is French or English.".to_string(),
+    };
+
+    format!(
+        "{language_instruction} Correct grammar, spelling, punctuation, and wording errors. \
+Preserve the original language, meaning, tone, line breaks, and Markdown formatting. \
+Return only the corrected text.\n\nText:\n{input}"
+    )
+}
+
+fn read_text(args: &[String]) -> Result<String> {
+    let text = if args.is_empty() {
         let mut stdin = io::stdin();
         if stdin.is_terminal() {
-            bail!("provide a question as arguments or pipe one on stdin");
+            bail!("provide text as arguments or pipe it on stdin");
         }
 
         let mut input = String::new();
         stdin
             .read_to_string(&mut input)
-            .context("failed to read question from stdin")?;
+            .context("failed to read text from stdin")?;
         input
     } else {
         args.join(" ")
     };
 
-    let question = question.trim().to_string();
-    if question.is_empty() {
-        bail!("question cannot be empty");
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        bail!("text cannot be empty");
     }
 
-    Ok(question)
+    Ok(text)
+}
+
+fn copy_to_clipboard(output: &str) -> Result<()> {
+    let mut clipboard = Clipboard::new().context("failed to access the system clipboard")?;
+    clipboard
+        .set_text(output.to_string())
+        .context("failed to copy output to the system clipboard")
+}
+
+fn print_output(output: &str, title: &str, raw: bool) {
+    if raw || !io::stdout().is_terminal() {
+        println!("{output}");
+        return;
+    }
+
+    println!("\x1b[1;36m## {title}\x1b[0m\n");
+    println!("{output}");
+}
+
+fn print_status(message: &str) {
+    if io::stderr().is_terminal() {
+        eprintln!("\x1b[2m{message}\x1b[0m");
+    } else {
+        eprintln!("{message}");
+    }
 }
 
 fn configured_ollama_url(arg_value: Option<&str>) -> String {
@@ -122,7 +298,7 @@ fn normalize_ollama_url(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_ollama_url;
+    use super::{Language, correct_prompt, normalize_ollama_url, translate_prompt};
 
     #[test]
     fn preserves_full_urls() {
@@ -138,5 +314,21 @@ mod tests {
             normalize_ollama_url("localhost:11434"),
             "http://localhost:11434"
         );
+    }
+
+    #[test]
+    fn translate_prompt_can_force_target_language() {
+        let prompt = translate_prompt(Some(Language::French), "hello");
+
+        assert!(prompt.contains("Translate the text into French."));
+        assert!(prompt.contains("Text:\nhello"));
+    }
+
+    #[test]
+    fn correct_prompt_can_force_language() {
+        let prompt = correct_prompt(Some(Language::English), "i has a apple");
+
+        assert!(prompt.contains("The text is in English."));
+        assert!(prompt.contains("Return only the corrected text."));
     }
 }

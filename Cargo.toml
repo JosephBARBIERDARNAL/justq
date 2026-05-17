@@ -3,7 +3,7 @@ name = "justa-question"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "A tiny Markdown-answer CLI for asking local Ollama models one question."
+description = "A tiny French/English translation and correction CLI powered by local Ollama models."
 repository = "https://github.com/y-sunflower/justa-question"
 readme = "README.md"
 keywords = ["ollama", "llm", "cli", "markdown"]
@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+arboard = "3.6.1"
 clap = { version = "4.5", features = ["derive", "env"] }
 ollama-rs = "0.3.4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
