@@ -18,6 +18,7 @@ use ollama_rs::{
 };
 
 const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
+const DEFAULT_MODEL: &str = "qwen2.5-coder:14b";
 const MARKDOWN_SYSTEM_PROMPT: &str = "\
 You are a precise bilingual writing assistant for French and English. \
 Return only the requested text, with no introduction, \
@@ -49,11 +50,10 @@ struct Cli {
     #[arg(
         short,
         long,
-        env = "OLLAMA_MODEL",
-        default_value = "qwen2.5-coder:14b",
-        help = "Ollama model name"
+        value_name = "MODEL",
+        help = "Ollama model name; defaults to JUSTQ_MODEL, then OLLAMA_MODEL, then qwen2.5-coder:14b"
     )]
-    model: String,
+    model: Option<String>,
 
     #[arg(
         long,
@@ -145,12 +145,13 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let input = read_text(cli.command.text_args())?;
     let user_prompt = cli.command.prompt(&input);
+    let model = configured_model(cli.model.as_deref());
     let ollama_url = configured_ollama_url(cli.ollama_url.as_deref());
 
     let ollama = Ollama::try_new(ollama_url.as_str())
         .with_context(|| format!("invalid Ollama URL: {ollama_url}"))?;
     let request = ChatMessageRequest::new(
-        cli.model.clone(),
+        model.clone(),
         vec![
             ChatMessage::system(MARKDOWN_SYSTEM_PROMPT.to_string()),
             ChatMessage::user(user_prompt),
@@ -161,8 +162,7 @@ async fn main() -> Result<()> {
     let response = ollama.send_chat_messages(request).await;
     drop(spinner);
 
-    let response =
-        response.with_context(|| format!("failed to query Ollama model {}", cli.model))?;
+    let response = response.with_context(|| format!("failed to query Ollama model {model}"))?;
     let output = response.message.content.trim();
 
     print_output(output, cli.raw);
@@ -348,6 +348,26 @@ fn configured_ollama_url(arg_value: Option<&str>) -> String {
     normalize_ollama_url(&value)
 }
 
+fn configured_model(arg_value: Option<&str>) -> String {
+    let justq_model = env::var("JUSTQ_MODEL").ok();
+    let ollama_model = env::var("OLLAMA_MODEL").ok();
+
+    select_model(arg_value, justq_model.as_deref(), ollama_model.as_deref())
+}
+
+fn select_model(
+    arg_value: Option<&str>,
+    justq_model: Option<&str>,
+    ollama_model: Option<&str>,
+) -> String {
+    [arg_value, justq_model, ollama_model]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.trim().is_empty())
+        .map(|value| value.trim().to_string())
+        .unwrap_or_else(|| DEFAULT_MODEL.to_string())
+}
+
 fn normalize_ollama_url(value: &str) -> String {
     let value = value.trim().trim_end_matches('/');
     if value.contains("://") {
@@ -359,7 +379,7 @@ fn normalize_ollama_url(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Language, correct_prompt, normalize_ollama_url, translate_prompt};
+    use super::{Language, correct_prompt, normalize_ollama_url, select_model, translate_prompt};
 
     #[test]
     fn preserves_full_urls() {
@@ -391,5 +411,33 @@ mod tests {
 
         assert!(prompt.contains("The text is in English."));
         assert!(prompt.contains("Return only the corrected text."));
+    }
+
+    #[test]
+    fn model_argument_wins_over_env_values() {
+        assert_eq!(
+            select_model(
+                Some("cli-model"),
+                Some("justq-env-model"),
+                Some("ollama-env-model")
+            ),
+            "cli-model"
+        );
+    }
+
+    #[test]
+    fn justq_model_wins_over_ollama_model() {
+        assert_eq!(
+            select_model(None, Some("justq-env-model"), Some("ollama-env-model")),
+            "justq-env-model"
+        );
+    }
+
+    #[test]
+    fn ollama_model_remains_supported() {
+        assert_eq!(
+            select_model(None, None, Some("ollama-env-model")),
+            "ollama-env-model"
+        );
     }
 }

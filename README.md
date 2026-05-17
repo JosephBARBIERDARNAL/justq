@@ -40,7 +40,23 @@ justq translate "bonjour tout le monde"
 justq translate "hello world"
 ```
 
-I personally added the following in my `~/.zshrc` file:
+Use a different default model:
+
+```bash
+export JUSTQ_MODEL="llama3:latest"
+justq correct "i has a apple"
+```
+
+`--model` still overrides the environment for a single command:
+
+```bash
+justq --model qwen2.5-coder:14b translate "hello world"
+```
+
+<br>
+
+> [!TIP]
+> I personally added the following in my `~/.zshrc` file:
 
 ```bash
 # translation
