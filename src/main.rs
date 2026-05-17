@@ -6,7 +6,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -14,7 +14,7 @@ use arboard::Clipboard;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use ollama_rs::{
     Ollama,
-    generation::chat::{ChatMessage, request::ChatMessageRequest},
+    generation::chat::{ChatMessage, ChatMessageResponseStream, request::ChatMessageRequest},
 };
 use termimad::MadSkin;
 use tokio_stream::StreamExt;
@@ -42,6 +42,7 @@ const SPINNER_MESSAGES: [&str; 8] = [
     "Formatting Markdown",
     "Waiting for Ollama",
 ];
+const MARKDOWN_RENDER_INTERVAL: Duration = Duration::from_millis(60);
 
 #[derive(Debug, Parser)]
 #[command(
@@ -185,7 +186,7 @@ async fn main() -> Result<()> {
     );
 
     if cli.command.streams_output() {
-        stream_output(&ollama, request, &model).await?;
+        stream_output(&ollama, request, &model, cli.raw).await?;
         return Ok(());
     }
 
@@ -312,21 +313,31 @@ fn copy_to_clipboard(output: &str) -> Result<()> {
         .context("failed to copy output to the system clipboard")
 }
 
-async fn stream_output(ollama: &Ollama, request: ChatMessageRequest, model: &str) -> Result<()> {
+async fn stream_output(
+    ollama: &Ollama,
+    request: ChatMessageRequest,
+    model: &str,
+    raw: bool,
+) -> Result<()> {
     let spinner = Spinner::start();
     let stream = ollama.send_chat_messages_stream(request).await;
     drop(spinner);
 
     let mut stream = stream.with_context(|| format!("failed to query Ollama model {model}"))?;
+
+    if raw || !io::stdout().is_terminal() {
+        return stream_raw_output(&mut stream, model).await;
+    }
+
+    stream_rendered_markdown(&mut stream, model).await
+}
+
+async fn stream_raw_output(stream: &mut ChatMessageResponseStream, model: &str) -> Result<()> {
     let mut stdout = io::stdout().lock();
     let mut printed_anything = false;
     let mut ends_with_newline = false;
 
-    while let Some(response) = stream.next().await {
-        let response = response
-            .map_err(|()| anyhow::anyhow!("failed to stream response from Ollama model {model}"))?;
-        let content = response.message.content;
-
+    while let Some((content, _done)) = next_stream_chunk(stream, model).await? {
         if content.is_empty() {
             continue;
         }
@@ -347,6 +358,76 @@ async fn stream_output(ollama: &Ollama, request: ChatMessageRequest, model: &str
     }
 
     Ok(())
+}
+
+async fn stream_rendered_markdown(
+    stream: &mut ChatMessageResponseStream,
+    model: &str,
+) -> Result<()> {
+    let skin = MadSkin::default();
+    let mut stdout = io::stdout().lock();
+    let mut markdown = String::new();
+    let mut rendered_lines = 0;
+    let mut needs_render = false;
+    let mut last_rendered_at: Option<Instant> = None;
+
+    while let Some((content, done)) = next_stream_chunk(stream, model).await? {
+        if !content.is_empty() {
+            markdown.push_str(&content);
+            needs_render = true;
+        }
+
+        let should_render = last_rendered_at
+            .map(|instant| instant.elapsed() >= MARKDOWN_RENDER_INTERVAL)
+            .unwrap_or(true);
+        if needs_render && (done || should_render) {
+            rendered_lines =
+                render_markdown_preview(&mut stdout, &skin, markdown.trim_end(), rendered_lines)?;
+            needs_render = false;
+            last_rendered_at = Some(Instant::now());
+        }
+    }
+
+    if needs_render {
+        render_markdown_preview(&mut stdout, &skin, markdown.trim_end(), rendered_lines)?;
+    }
+
+    Ok(())
+}
+
+async fn next_stream_chunk(
+    stream: &mut ChatMessageResponseStream,
+    model: &str,
+) -> Result<Option<(String, bool)>> {
+    match stream.next().await {
+        Some(Ok(response)) => Ok(Some((response.message.content, response.done))),
+        Some(Err(())) => bail!("failed to stream response from Ollama model {model}"),
+        None => Ok(None),
+    }
+}
+
+fn render_markdown_preview<W: Write>(
+    writer: &mut W,
+    skin: &MadSkin,
+    markdown: &str,
+    previous_lines: usize,
+) -> Result<usize> {
+    if previous_lines > 0 {
+        write!(writer, "\x1b[{previous_lines}A\x1b[J")
+            .context("failed to clear previous Markdown preview")?;
+    }
+
+    if markdown.is_empty() {
+        writer.flush().context("failed to flush Markdown preview")?;
+        return Ok(0);
+    }
+
+    let text = skin.term_text(markdown);
+    let rendered_lines = text.lines.len();
+    write!(writer, "{text}").context("failed to write Markdown preview")?;
+    writer.flush().context("failed to flush Markdown preview")?;
+
+    Ok(rendered_lines)
 }
 
 struct Spinner {
