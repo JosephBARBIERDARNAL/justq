@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 description = "A tiny software-development Q&A, French/English translation, and correction CLI powered by local Ollama models."
+license = "MIT"
 readme = "README.md"
 repository = "https://github.com/y-sunflower/justq"
 keywords = ["cli", "llm", "markdown", "ollama"]
