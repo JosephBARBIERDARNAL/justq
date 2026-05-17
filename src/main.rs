@@ -6,7 +6,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -17,6 +17,7 @@ use ollama_rs::{
     generation::chat::{ChatMessage, request::ChatMessageRequest},
 };
 use termimad::MadSkin;
+use tokio_stream::StreamExt;
 
 const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
 const DEFAULT_MODEL: &str = "qwen2.5-coder:14b";
@@ -30,16 +31,16 @@ Answer the user's question directly with practical software engineering guidance
 Use concise Markdown with short sections, bullets when useful, and fenced code blocks for code. \
 Do not translate or correct the question unless explicitly asked.\
 The question might not be about software development, in this case adapt to it.";
-const SPINNER_FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
+const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_MESSAGES: [&str; 8] = [
-    "Polishing the sentence",
-    "Looking for the mot juste",
-    "Negotiating with accents",
-    "Untangling grammar",
-    "Sharpening the wording",
-    "Keeping the tone intact",
-    "Checking both languages",
-    "Warming up the local model",
+    "Asking the model",
+    "Reading the prompt",
+    "Thinking through it",
+    "Drafting the answer",
+    "Checking the details",
+    "Keeping it concise",
+    "Formatting Markdown",
+    "Waiting for Ollama",
 ];
 
 #[derive(Debug, Parser)]
@@ -74,7 +75,7 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Do not copy the raw model output to the system clipboard"
+        help = "Do not copy translation or correction output to the system clipboard"
     )]
     no_copy: bool,
 
@@ -117,7 +118,7 @@ enum Command {
         after_help = "Examples:
   justq ask \"how do I handle errors in Rust?\"
   justq ask \"explain when to use Arc<Mutex<T>>\"
-  echo \"why is this borrow checker error happening?\" | justq ask --no-copy"
+  echo \"why is this borrow checker error happening?\" | justq ask"
     )]
     Ask(AskCommand),
 }
@@ -183,6 +184,11 @@ async fn main() -> Result<()> {
         ],
     );
 
+    if cli.command.streams_output() {
+        stream_output(&ollama, request, &model).await?;
+        return Ok(());
+    }
+
     let spinner = Spinner::start();
     let response = ollama.send_chat_messages(request).await;
     drop(spinner);
@@ -224,6 +230,10 @@ impl Command {
             Self::Correct(command) => correct_prompt(command.language, input),
             Self::Ask(_) => ask_prompt(input),
         }
+    }
+
+    fn streams_output(&self) -> bool {
+        matches!(self, Self::Ask(_))
     }
 }
 
@@ -302,6 +312,43 @@ fn copy_to_clipboard(output: &str) -> Result<()> {
         .context("failed to copy output to the system clipboard")
 }
 
+async fn stream_output(ollama: &Ollama, request: ChatMessageRequest, model: &str) -> Result<()> {
+    let spinner = Spinner::start();
+    let stream = ollama.send_chat_messages_stream(request).await;
+    drop(spinner);
+
+    let mut stream = stream.with_context(|| format!("failed to query Ollama model {model}"))?;
+    let mut stdout = io::stdout().lock();
+    let mut printed_anything = false;
+    let mut ends_with_newline = false;
+
+    while let Some(response) = stream.next().await {
+        let response = response
+            .map_err(|()| anyhow::anyhow!("failed to stream response from Ollama model {model}"))?;
+        let content = response.message.content;
+
+        if content.is_empty() {
+            continue;
+        }
+
+        stdout
+            .write_all(content.as_bytes())
+            .context("failed to write streamed output")?;
+        stdout.flush().context("failed to flush streamed output")?;
+
+        printed_anything = true;
+        ends_with_newline = content.ends_with('\n');
+    }
+
+    if printed_anything && !ends_with_newline {
+        stdout
+            .write_all(b"\n")
+            .context("failed to write streamed output terminator")?;
+    }
+
+    Ok(())
+}
+
 struct Spinner {
     running: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
@@ -352,11 +399,7 @@ impl Drop for Spinner {
 }
 
 fn random_spinner_message() -> &'static str {
-    let seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let index = seed as usize % SPINNER_MESSAGES.len();
+    let index = fastrand::usize(..SPINNER_MESSAGES.len());
 
     SPINNER_MESSAGES[index]
 }
