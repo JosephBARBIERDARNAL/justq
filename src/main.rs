@@ -14,6 +14,7 @@ use arboard::Clipboard;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use ollama_rs::{
     Ollama,
+    error::OllamaError,
     generation::chat::{ChatMessage, ChatMessageResponseStream, request::ChatMessageRequest},
 };
 use termimad::MadSkin;
@@ -186,7 +187,7 @@ async fn main() -> Result<()> {
     );
 
     if cli.command.streams_output() {
-        stream_output(&ollama, request, &model, cli.raw).await?;
+        stream_output(&ollama, request, &model, &ollama_url, cli.raw).await?;
         return Ok(());
     }
 
@@ -194,7 +195,7 @@ async fn main() -> Result<()> {
     let response = ollama.send_chat_messages(request).await;
     drop(spinner);
 
-    let response = response.with_context(|| format!("failed to query Ollama model {model}"))?;
+    let response = handle_ollama_response(response, &model, &ollama_url)?;
     let output = response.message.content.trim();
 
     print_output(output, cli.raw);
@@ -317,13 +318,14 @@ async fn stream_output(
     ollama: &Ollama,
     request: ChatMessageRequest,
     model: &str,
+    ollama_url: &str,
     raw: bool,
 ) -> Result<()> {
     let spinner = Spinner::start();
     let stream = ollama.send_chat_messages_stream(request).await;
     drop(spinner);
 
-    let mut stream = stream.with_context(|| format!("failed to query Ollama model {model}"))?;
+    let mut stream = handle_ollama_response(stream, model, ollama_url)?;
 
     if raw || !io::stdout().is_terminal() {
         return stream_raw_output(&mut stream, model).await;
@@ -428,6 +430,24 @@ fn render_markdown_preview<W: Write>(
     writer.flush().context("failed to flush Markdown preview")?;
 
     Ok(rendered_lines)
+}
+
+fn handle_ollama_response<T>(
+    response: ollama_rs::error::Result<T>,
+    model: &str,
+    ollama_url: &str,
+) -> Result<T> {
+    match response {
+        Ok(response) => Ok(response),
+        Err(error) if is_ollama_connect_error(&error) => bail!(
+            "could not connect to Ollama at {ollama_url}. Is `ollama serve` running?\n\nStart it with:\n  ollama serve"
+        ),
+        Err(error) => Err(error).with_context(|| format!("failed to query Ollama model {model}")),
+    }
+}
+
+fn is_ollama_connect_error(error: &OllamaError) -> bool {
+    matches!(error, OllamaError::ReqwestError(error) if error.is_connect())
 }
 
 struct Spinner {
