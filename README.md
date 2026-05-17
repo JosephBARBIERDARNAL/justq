@@ -14,7 +14,7 @@ This is a tool I built for my personal use for stuff that don't require advanced
 
 ## Requirements & installation
 
-- Rust 1.85 or newer
+- Rust 1.95+
 - Ollama running locally
 - A local model, for example:
 
@@ -31,6 +31,14 @@ cargo install --git https://github.com/y-sunflower/justq
 <br>
 
 ## Usage
+
+- Launch ollama server
+
+```
+ollama serve
+```
+
+Then in another windows:
 
 Ask a question:
 
