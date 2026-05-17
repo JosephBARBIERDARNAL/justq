@@ -1,11 +1,12 @@
 # justq
 
-A tiny Rust CLI that translates or corrects French/English text with a local
-Ollama model.
+A tiny CLI that translates or corrects French/English text with a local Ollama model, with automatic copy to clipboard.
 
 The installed command is `justq`.
 
-## Requirements
+<br>
+
+## Requirements & installation
 
 - Rust 1.85 or newer
 - Ollama running locally
@@ -15,11 +16,13 @@ The installed command is `justq`.
 ollama pull qwen2.5-coder:14b
 ```
 
-## Install
+Then install with:
 
 ```bash
 cargo install --git https://github.com/y-sunflower/justq
 ```
+
+<br>
 
 ## Usage
 
@@ -30,7 +33,7 @@ justq correct "i has a apple"
 justq correct "je suis aller au bureau"
 ```
 
-Translate between French and English:
+Translate between French and English (automatically detected):
 
 ```bash
 justq translate "bonjour tout le monde"

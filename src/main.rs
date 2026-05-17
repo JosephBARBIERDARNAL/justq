@@ -20,7 +20,7 @@ use ollama_rs::{
 const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
 const MARKDOWN_SYSTEM_PROMPT: &str = "\
 You are a precise bilingual writing assistant for French and English. \
-Return valid Markdown. Return only the requested text, with no introduction, \
+Return only the requested text, with no introduction, \
 explanation, quotation marks, or surrounding code block.";
 const SPINNER_FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
 const SPINNER_MESSAGES: [&str; 8] = [
