@@ -1,6 +1,7 @@
 use std::{
     env,
     io::{self, IsTerminal, Read, Write},
+    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -44,6 +45,9 @@ const SPINNER_MESSAGES: [&str; 8] = [
     "Waiting for Ollama",
 ];
 const MARKDOWN_RENDER_INTERVAL: Duration = Duration::from_millis(60);
+const OLLAMA_START_TIMEOUT: Duration = Duration::from_secs(30);
+const OLLAMA_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const OLLAMA_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Parser)]
 #[command(
@@ -175,6 +179,8 @@ async fn main() -> Result<()> {
     let user_prompt = cli.command.prompt(&input);
     let model = configured_model(cli.model.as_deref());
     let ollama_url = configured_ollama_url(cli.ollama_url.as_deref());
+
+    ensure_ollama_running(&ollama_url).await?;
 
     let ollama = Ollama::try_new(ollama_url.as_str())
         .with_context(|| format!("invalid Ollama URL: {ollama_url}"))?;
@@ -450,6 +456,98 @@ fn is_ollama_connect_error(error: &OllamaError) -> bool {
     matches!(error, OllamaError::ReqwestError(error) if error.is_connect())
 }
 
+async fn ensure_ollama_running(ollama_url: &str) -> Result<()> {
+    if is_ollama_reachable(ollama_url).await {
+        return Ok(());
+    }
+
+    if !url_is_local(ollama_url) {
+        bail!(
+            "could not connect to Ollama at {ollama_url}. Is `ollama serve` running?\n\nStart it with:\n  ollama serve"
+        );
+    }
+
+    print_status("Ollama is not running, starting `ollama serve` in the background...");
+
+    spawn_ollama_serve().with_context(|| {
+        format!(
+            "could not connect to Ollama at {ollama_url} and failed to start `ollama serve`. Is the `ollama` CLI installed and on PATH?"
+        )
+    })?;
+
+    wait_for_ollama(ollama_url, OLLAMA_START_TIMEOUT)
+        .await
+        .with_context(|| {
+            format!(
+                "started `ollama serve` but it did not become reachable at {ollama_url} within {}s",
+                OLLAMA_START_TIMEOUT.as_secs()
+            )
+        })
+}
+
+fn spawn_ollama_serve() -> Result<()> {
+    std::process::Command::new("ollama")
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("could not spawn `ollama`")?;
+    Ok(())
+}
+
+async fn wait_for_ollama(url: &str, timeout: Duration) -> Result<()> {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if is_ollama_reachable(url).await {
+            return Ok(());
+        }
+        tokio::time::sleep(OLLAMA_POLL_INTERVAL).await;
+    }
+    bail!("timed out waiting for Ollama to start")
+}
+
+async fn is_ollama_reachable(url: &str) -> bool {
+    let Some((host, port)) = host_and_port(url) else {
+        return false;
+    };
+    tokio::time::timeout(
+        OLLAMA_PROBE_TIMEOUT,
+        tokio::net::TcpStream::connect((host.as_str(), port)),
+    )
+    .await
+    .map(|result| result.is_ok())
+    .unwrap_or(false)
+}
+
+fn host_and_port(url: &str) -> Option<(String, u16)> {
+    let after_scheme = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url);
+    let host_port = after_scheme.split('/').next()?;
+    if host_port.is_empty() {
+        return None;
+    }
+    if let Some((host, port)) = host_port.rsplit_once(':') {
+        let port: u16 = port.parse().ok()?;
+        Some((host.to_string(), port))
+    } else {
+        let default_port = if url.starts_with("https://") { 443 } else { 80 };
+        Some((host_port.to_string(), default_port))
+    }
+}
+
+fn url_is_local(url: &str) -> bool {
+    let Some((host, _)) = host_and_port(url) else {
+        return false;
+    };
+    matches!(
+        host.as_str(),
+        "127.0.0.1" | "localhost" | "0.0.0.0" | "::1" | "[::1]"
+    )
+}
+
 struct Spinner {
     running: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
@@ -566,8 +664,8 @@ fn normalize_ollama_url(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ASK_SYSTEM_PROMPT, Language, ask_prompt, correct_prompt, normalize_ollama_url,
-        select_model, translate_prompt,
+        ASK_SYSTEM_PROMPT, Language, ask_prompt, correct_prompt, host_and_port,
+        normalize_ollama_url, select_model, translate_prompt, url_is_local,
     };
 
     #[test]
@@ -630,6 +728,29 @@ mod tests {
             select_model(None, Some("justq-env-model"), Some("ollama-env-model")),
             "justq-env-model"
         );
+    }
+
+    #[test]
+    fn host_and_port_parses_default_url() {
+        assert_eq!(
+            host_and_port("http://127.0.0.1:11434"),
+            Some(("127.0.0.1".to_string(), 11434))
+        );
+    }
+
+    #[test]
+    fn host_and_port_parses_url_with_path() {
+        assert_eq!(
+            host_and_port("http://localhost:11434/api/tags"),
+            Some(("localhost".to_string(), 11434))
+        );
+    }
+
+    #[test]
+    fn url_is_local_recognizes_loopback_hosts() {
+        assert!(url_is_local("http://127.0.0.1:11434"));
+        assert!(url_is_local("http://localhost:11434"));
+        assert!(!url_is_local("http://ollama.example.com:11434"));
     }
 
     #[test]
